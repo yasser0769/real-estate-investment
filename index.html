@@ -296,7 +296,8 @@
       background: #f9fcf8;
     }
 
-    .switcher {
+    .switcher,
+    .mode-switcher {
       display: inline-flex;
       gap: 8px;
       padding: 6px;
@@ -305,7 +306,8 @@
       border: 1px solid var(--border);
     }
 
-    .switcher button {
+    .switcher button,
+    .mode-switcher button {
       border: none;
       padding: 8px 12px;
       border-radius: 10px;
@@ -317,7 +319,8 @@
       min-height: 44px;
     }
 
-    .switcher button.active {
+    .switcher button.active,
+    .mode-switcher button.active {
       background: rgba(31, 143, 104, 0.12);
       color: var(--accent);
     }
@@ -358,6 +361,10 @@
       <h2>المدخلات</h2>
       <p class="helper-text">كل المدخلات متاحة أعلى الصفحة وتؤثر مباشرة على النتائج.</p>
       <div class="actions-row">
+        <div class="mode-switcher" aria-label="تبديل وضع المدخلات">
+          <button type="button" data-mode="simple" class="active">مبسّط</button>
+          <button type="button" data-mode="advanced">متقدّم</button>
+        </div>
         <button class="btn secondary" id="resetBtn" type="button">إعادة تعيين</button>
         <button class="btn secondary" id="exportCsv" type="button">تصدير CSV</button>
       </div>
@@ -443,6 +450,7 @@
       { key: 'endYear', label: 'سنة النهاية', unit: '', step: '1' },
     ];
 
+    const state = { ...defaults };
     const inputsGrid = document.getElementById('inputsGrid');
     const resultsTableBody = document.querySelector('#resultsTable tbody');
     const summaryGrid = document.getElementById('summaryGrid');
@@ -450,9 +458,13 @@
     const exportBtn = document.getElementById('exportCsv');
     const resetBtn = document.getElementById('resetBtn');
     const switcher = document.querySelector('.switcher');
+    const modeSwitcher = document.querySelector('.mode-switcher');
     const tableWrapper = document.getElementById('tableWrapper');
 
-    let downLocked = false;
+    const simplifiedKeys = ['rentYield', 'price0', 'rateAnnual', 'downPayment'];
+    let downLocked = true;
+    let advancedLockState = false;
+    let currentMode = 'simple';
     let debounceTimer;
 
     const numberFormatter = (decimals = 0) => new Intl.NumberFormat('en-US', {
@@ -464,7 +476,12 @@
     const fmt2 = numberFormatter(2);
 
     function createInputs() {
+      const currentValues = { ...state };
+      inputsGrid.innerHTML = '';
+      const modeKeys = currentMode === 'simple' ? simplifiedKeys : fieldsConfig.map(f => f.key);
+
       fieldsConfig.forEach(cfg => {
+        if (!modeKeys.includes(cfg.key)) return;
         const card = document.createElement('div');
         card.className = 'input-card';
 
@@ -480,11 +497,11 @@
         input.name = cfg.key;
         input.type = 'number';
         input.step = cfg.step;
-        input.value = defaults[cfg.key];
+        input.value = currentValues[cfg.key] ?? defaults[cfg.key];
         input.dataset.key = cfg.key;
         input.min = '0';
         if (cfg.key === 'downPayment') {
-          input.disabled = true;
+          input.disabled = currentMode === 'advanced' ? !downLocked : false;
         }
 
         const unit = document.createElement('span');
@@ -496,18 +513,20 @@
         card.appendChild(label);
         card.appendChild(wrap);
 
-        if (cfg.key === 'downPayment') {
+        if (cfg.key === 'downPayment' && currentMode === 'advanced') {
           const toggle = document.createElement('label');
           toggle.className = 'switch-toggle';
           toggle.innerHTML = '<span>قفل الدفعة الأولى</span>';
           const checkbox = document.createElement('input');
           checkbox.type = 'checkbox';
           checkbox.id = 'lockToggle';
+          checkbox.checked = downLocked;
           toggle.prepend(checkbox);
           card.appendChild(toggle);
 
           checkbox.addEventListener('change', () => {
             downLocked = checkbox.checked;
+            advancedLockState = downLocked;
             input.disabled = !downLocked;
             if (!downLocked) {
               syncDownPaymentFromPct();
@@ -516,29 +535,37 @@
           });
         }
 
+        if (cfg.key === 'downPayment' && currentMode === 'simple') {
+          const note = document.createElement('div');
+          note.className = 'helper-text';
+          note.textContent = 'مقفلة في الوضع المبسّط';
+          card.appendChild(note);
+        }
+
         inputsGrid.appendChild(card);
       });
     }
 
     function getInputValue(key) {
-      const el = document.getElementById(key);
-      return parseFloat(el.value || '0');
+      return parseFloat(state[key] ?? defaults[key] ?? 0);
     }
 
     function syncDownPaymentFromPct() {
       const price = getInputValue('price0');
       const downPct = getInputValue('downPct') / 100;
       const value = price * downPct;
+      state.downPayment = Math.round(value);
       const dpInput = document.getElementById('downPayment');
-      dpInput.value = Math.round(value);
+      if (dpInput) dpInput.value = Math.round(value);
     }
 
     function syncDownPctFromPayment() {
       const price = getInputValue('price0');
       const dp = getInputValue('downPayment');
       const pct = price > 0 ? (dp / price) * 100 : 0;
+      state.downPct = pct;
       const pctInput = document.getElementById('downPct');
-      pctInput.value = pct.toFixed(2);
+      if (pctInput) pctInput.value = pct.toFixed(2);
     }
 
     function pmt(rate, nper, pv) {
@@ -548,11 +575,7 @@
     }
 
     function collectValues() {
-      const vals = {};
-      fieldsConfig.forEach(({ key }) => {
-        vals[key] = getInputValue(key);
-      });
-      return vals;
+      return { ...state };
     }
 
     function computeRows(vals) {
@@ -613,8 +636,8 @@
       if (!rows.length) return;
       const first = rows[0];
       const items = [
-        { label: 'القسط الشهري', value: fmt0.format(monthlyPayment) },
-        { label: 'القسط السنوي', value: fmt0.format(annualPayment) },
+        { label: 'القسط الشهري (السنة الأولى)', value: fmt0.format(first.monthlyPayment) },
+        { label: 'القسط السنوي (السنة الأولى)', value: fmt0.format(first.annualPayment) },
         { label: 'NOI قبل القسط', value: fmt0.format(first.NOI) },
         { label: 'DSCR', value: fmt2.format(first.dscr) },
         { label: 'Break-even rent (شهري)', value: first.breakEvenMonthly ? fmt0.format(first.breakEvenMonthly) : '—' },
@@ -678,7 +701,7 @@
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         const vals = collectValues();
-        if (!downLocked) {
+        if (currentMode === 'advanced' && !downLocked) {
           syncDownPaymentFromPct();
           vals.downPayment = getInputValue('downPayment');
         }
@@ -724,17 +747,20 @@
       inputsGrid.addEventListener('input', (e) => {
         const key = e.target.dataset.key;
         if (!key) return;
-        if (key === 'downPct' && !downLocked) {
+        const val = parseFloat(e.target.value || '0');
+        state[key] = isNaN(val) ? 0 : val;
+        const isAdvanced = currentMode === 'advanced';
+        if (key === 'downPct' && isAdvanced && !downLocked) {
           syncDownPaymentFromPct();
         }
-        if (key === 'price0') {
+        if (key === 'price0' && isAdvanced) {
           if (!downLocked) {
             syncDownPaymentFromPct();
           } else {
             syncDownPctFromPayment();
           }
         }
-        if (key === 'downPayment' && downLocked) {
+        if (key === 'downPayment' && isAdvanced && downLocked) {
           syncDownPctFromPayment();
         }
         triggerRecalc();
@@ -747,18 +773,16 @@
       });
 
       resetBtn.addEventListener('click', () => {
-        fieldsConfig.forEach(({ key }) => {
-          const el = document.getElementById(key);
-          el.value = defaults[key];
-        });
-        downLocked = false;
-        const lockToggle = document.getElementById('lockToggle');
-        const dpInput = document.getElementById('downPayment');
-        if (lockToggle) {
-          lockToggle.checked = false;
-          dpInput.disabled = true;
+        Object.assign(state, defaults);
+        if (currentMode === 'simple') {
+          downLocked = true;
+        } else {
+          downLocked = advancedLockState = false;
         }
-        syncDownPaymentFromPct();
+        createInputs();
+        if (currentMode === 'advanced' && !downLocked) {
+          syncDownPaymentFromPct();
+        }
         triggerRecalc();
       });
 
@@ -773,12 +797,29 @@
           tableWrapper.classList.remove('compact');
         }
       });
+
+      modeSwitcher.addEventListener('click', (e) => {
+        if (e.target.tagName !== 'BUTTON') return;
+        const mode = e.target.dataset.mode;
+        if (mode === currentMode) return;
+        modeSwitcher.querySelectorAll('button').forEach(btn => btn.classList.remove('active'));
+        e.target.classList.add('active');
+        if (mode === 'simple') {
+          advancedLockState = downLocked;
+          downLocked = true;
+          currentMode = 'simple';
+        } else {
+          downLocked = advancedLockState;
+          currentMode = 'advanced';
+        }
+        createInputs();
+        triggerRecalc();
+      });
     }
 
     function init() {
       createInputs();
       attachEvents();
-      syncDownPaymentFromPct();
       triggerRecalc();
     }
 
