@@ -35,6 +35,16 @@
       min-height: 100dvh;
       -webkit-text-size-adjust: 100%;
       -webkit-tap-highlight-color: transparent;
+      font-weight: 400;
+    }
+
+    button,
+    .mode-switcher button,
+    .switcher button,
+    input,
+    select {
+      font-family: 'IBM Plex Sans Arabic', system-ui, sans-serif;
+      font-weight: 600;
     }
 
     h1 {
@@ -415,7 +425,6 @@
   </div>
 
   <script>
-    const DSCR_THRESHOLD = 1.25;
     const debounceDelay = 150;
 
     const defaults = {
@@ -432,6 +441,7 @@
       fixedAnnual: 0,
       startYear: 2026,
       endYear: 2050,
+      dscrThreshold: 1.25,
     };
 
     const fieldsConfig = [
@@ -448,6 +458,7 @@
       { key: 'fixedAnnual', label: 'مصاريف ثابتة سنوية', unit: 'ريال', step: '100' },
       { key: 'startYear', label: 'سنة البداية', unit: '', step: '1' },
       { key: 'endYear', label: 'سنة النهاية', unit: '', step: '1' },
+      { key: 'dscrThreshold', label: 'حد DSCR للنجاح', unit: '', step: '0.05' },
     ];
 
     const state = { ...defaults };
@@ -461,7 +472,7 @@
     const modeSwitcher = document.querySelector('.mode-switcher');
     const tableWrapper = document.getElementById('tableWrapper');
 
-    const simplifiedKeys = ['rentYield', 'price0', 'rateAnnual', 'downPayment'];
+    const simplifiedKeys = ['rentYield', 'price0', 'rateAnnual', 'downPct', 'dscrThreshold'];
     let downLocked = true;
     let advancedLockState = false;
     let currentMode = 'simple';
@@ -484,6 +495,7 @@
         if (!modeKeys.includes(cfg.key)) return;
         const card = document.createElement('div');
         card.className = 'input-card';
+        card.dataset.key = cfg.key;
 
         const label = document.createElement('label');
         label.setAttribute('for', cfg.key);
@@ -501,7 +513,7 @@
         input.dataset.key = cfg.key;
         input.min = '0';
         if (cfg.key === 'downPayment') {
-          input.disabled = currentMode === 'advanced' ? !downLocked : false;
+          input.disabled = currentMode === 'advanced' ? !downLocked : true;
         }
 
         const unit = document.createElement('span');
@@ -535,10 +547,13 @@
           });
         }
 
-        if (cfg.key === 'downPayment' && currentMode === 'simple') {
+        if (cfg.key === 'downPct' && currentMode === 'simple') {
           const note = document.createElement('div');
           note.className = 'helper-text';
-          note.textContent = 'مقفلة في الوضع المبسّط';
+          const price = parseFloat(state.price0 || defaults.price0);
+          const pct = parseFloat(state.downPct || defaults.downPct);
+          const computedDown = Math.round(price * (pct / 100));
+          note.textContent = `الدفعة الأولى المحسوبة: ${fmt0.format(computedDown)} ريال`;
           card.appendChild(note);
         }
 
@@ -566,6 +581,17 @@
       state.downPct = pct;
       const pctInput = document.getElementById('downPct');
       if (pctInput) pctInput.value = pct.toFixed(2);
+    }
+
+    function updateSimpleDownNote() {
+      const card = inputsGrid.querySelector('[data-key=\"downPct\"]');
+      if (!card) return;
+      const note = card.querySelector('.helper-text');
+      if (!note) return;
+      const price = parseFloat(state.price0 || defaults.price0);
+      const pct = parseFloat(state.downPct || defaults.downPct);
+      const computedDown = Math.round(price * (pct / 100));
+      note.textContent = `الدفعة الأولى المحسوبة: ${fmt0.format(computedDown)} ريال`;
     }
 
     function pmt(rate, nper, pv) {
@@ -636,8 +662,10 @@
       if (!rows.length) return;
       const first = rows[0];
       const items = [
-        { label: 'القسط الشهري (السنة الأولى)', value: fmt0.format(first.monthlyPayment) },
-        { label: 'القسط السنوي (السنة الأولى)', value: fmt0.format(first.annualPayment) },
+        { label: 'القسط الشهري', value: fmt0.format(first.monthlyPayment) },
+        { label: 'القسط السنوي', value: fmt0.format(first.annualPayment) },
+        { label: 'الإيجار الشهري', value: fmt0.format(first.rentMonthly) },
+        { label: 'الإيجار السنوي', value: fmt0.format(first.rentAnnual) },
         { label: 'NOI قبل القسط', value: fmt0.format(first.NOI) },
         { label: 'DSCR', value: fmt2.format(first.dscr) },
         { label: 'Break-even rent (شهري)', value: first.breakEvenMonthly ? fmt0.format(first.breakEvenMonthly) : '—' },
@@ -659,12 +687,13 @@
         summaryGrid.appendChild(div);
       });
 
-      const good = first.dscr >= DSCR_THRESHOLD && first.netProfitMonthly > 0;
+      const threshold = getInputValue('dscrThreshold');
+      const good = first.dscr >= threshold && first.netProfitMonthly > 0;
       decisionEl.className = 'decision ' + (good ? 'good' : 'bad');
       decisionEl.textContent = good ? 'ناجح' : 'غير مناسب';
       const badge = document.createElement('span');
       badge.className = 'pill';
-      badge.textContent = `DSCR ≥ ${DSCR_THRESHOLD}`;
+      badge.textContent = `DSCR ≥ ${fmt2.format(threshold)}`;
       decisionEl.appendChild(badge);
     }
 
@@ -701,7 +730,11 @@
       clearTimeout(debounceTimer);
       debounceTimer = setTimeout(() => {
         const vals = collectValues();
-        if (currentMode === 'advanced' && !downLocked) {
+        if (currentMode === 'simple') {
+          syncDownPaymentFromPct();
+          vals.downPayment = getInputValue('downPayment');
+          updateSimpleDownNote();
+        } else if (currentMode === 'advanced' && !downLocked) {
           syncDownPaymentFromPct();
           vals.downPayment = getInputValue('downPayment');
         }
@@ -750,14 +783,24 @@
         const val = parseFloat(e.target.value || '0');
         state[key] = isNaN(val) ? 0 : val;
         const isAdvanced = currentMode === 'advanced';
-        if (key === 'downPct' && isAdvanced && !downLocked) {
-          syncDownPaymentFromPct();
-        }
-        if (key === 'price0' && isAdvanced) {
-          if (!downLocked) {
+        if (key === 'downPct') {
+          if (isAdvanced && !downLocked) {
             syncDownPaymentFromPct();
+          } else if (!isAdvanced) {
+            syncDownPaymentFromPct();
+            updateSimpleDownNote();
+          }
+        }
+        if (key === 'price0') {
+          if (isAdvanced) {
+            if (!downLocked) {
+              syncDownPaymentFromPct();
+            } else {
+              syncDownPctFromPayment();
+            }
           } else {
-            syncDownPctFromPayment();
+            syncDownPaymentFromPct();
+            updateSimpleDownNote();
           }
         }
         if (key === 'downPayment' && isAdvanced && downLocked) {
@@ -782,6 +825,10 @@
         createInputs();
         if (currentMode === 'advanced' && !downLocked) {
           syncDownPaymentFromPct();
+        }
+        if (currentMode === 'simple') {
+          syncDownPaymentFromPct();
+          updateSimpleDownNote();
         }
         triggerRecalc();
       });
@@ -813,6 +860,10 @@
           currentMode = 'advanced';
         }
         createInputs();
+        if (currentMode === 'simple') {
+          syncDownPaymentFromPct();
+          updateSimpleDownNote();
+        }
         triggerRecalc();
       });
     }
