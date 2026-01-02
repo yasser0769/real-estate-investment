@@ -485,6 +485,25 @@
 
     const fmt0 = numberFormatter(0);
     const fmt2 = numberFormatter(2);
+    const formatMoney = (v) => fmt0.format(isFinite(v) ? v : 0);
+    const formatDecimal = (v, dec = 2) => new Intl.NumberFormat('en-US', { minimumFractionDigits: dec, maximumFractionDigits: dec }).format(isFinite(v) ? v : 0);
+
+    const fieldMeta = {
+      price0: { kind: 'money', decimals: 0 },
+      downPayment: { kind: 'money', decimals: 0 },
+      fixedAnnual: { kind: 'money', decimals: 0 },
+      rentYield: { kind: 'decimal', decimals: 2 },
+      rentGrowth: { kind: 'decimal', decimals: 2 },
+      capitalGrowth: { kind: 'decimal', decimals: 2 },
+      downPct: { kind: 'decimal', decimals: 2 },
+      rateAnnual: { kind: 'decimal', decimals: 2 },
+      vacancy: { kind: 'decimal', decimals: 2 },
+      opexPct: { kind: 'decimal', decimals: 2 },
+      dscrThreshold: { kind: 'decimal', decimals: 2 },
+      termYears: { kind: 'integer' },
+      startYear: { kind: 'integer' },
+      endYear: { kind: 'integer' },
+    };
 
     function createInputs() {
       const currentValues = { ...state };
@@ -507,11 +526,22 @@
         const input = document.createElement('input');
         input.id = cfg.key;
         input.name = cfg.key;
-        input.type = 'number';
-        input.step = cfg.step;
-        input.value = currentValues[cfg.key] ?? defaults[cfg.key];
+        input.type = 'text';
+        input.autocomplete = 'off';
+        input.autocorrect = 'off';
+        input.spellcheck = false;
         input.dataset.key = cfg.key;
-        input.min = '0';
+        const meta = fieldMeta[cfg.key] || { kind: 'decimal', decimals: 2 };
+        if (meta.kind === 'money' || meta.kind === 'integer') {
+          input.inputMode = 'numeric';
+          input.pattern = '[0-9,]*';
+        } else {
+          input.inputMode = 'decimal';
+          input.pattern = '[0-9.,]*';
+        }
+        input.step = cfg.step;
+        const displayVal = formatDisplayValue(cfg.key, currentValues[cfg.key] ?? defaults[cfg.key]);
+        input.value = displayVal;
         if (cfg.key === 'downPayment') {
           input.disabled = currentMode === 'advanced' ? !downLocked : true;
         }
@@ -565,13 +595,35 @@
       return parseFloat(state[key] ?? defaults[key] ?? 0);
     }
 
+    function sanitizeInput(val, allowDecimal = false) {
+      let cleaned = (val || '').replace(/,/g, '');
+      if (allowDecimal) {
+        cleaned = cleaned.replace(/[^0-9.]/g, '');
+        const parts = cleaned.split('.');
+        if (parts.length > 2) {
+          cleaned = parts[0] + '.' + parts.slice(1).join('');
+        }
+      } else {
+        cleaned = cleaned.replace(/[^0-9]/g, '');
+      }
+      return cleaned;
+    }
+
+    function formatDisplayValue(key, value) {
+      const meta = fieldMeta[key] || { kind: 'decimal', decimals: 2 };
+      const num = Number(value) || 0;
+      if (meta.kind === 'money') return formatMoney(num);
+      if (meta.kind === 'integer') return Math.round(num).toString();
+      return formatDecimal(num, meta.decimals ?? 2);
+    }
+
     function syncDownPaymentFromPct() {
       const price = getInputValue('price0');
       const downPct = getInputValue('downPct') / 100;
       const value = price * downPct;
       state.downPayment = Math.round(value);
       const dpInput = document.getElementById('downPayment');
-      if (dpInput) dpInput.value = Math.round(value);
+      if (dpInput) dpInput.value = formatMoney(Math.round(value));
     }
 
     function syncDownPctFromPayment() {
@@ -591,7 +643,7 @@
       const price = parseFloat(state.price0 || defaults.price0);
       const pct = parseFloat(state.downPct || defaults.downPct);
       const computedDown = Math.round(price * (pct / 100));
-      note.textContent = `الدفعة الأولى المحسوبة: ${fmt0.format(computedDown)} ريال`;
+      note.textContent = `الدفعة الأولى المحسوبة: ${formatMoney(computedDown)} ريال`;
     }
 
     function pmt(rate, nper, pv) {
@@ -780,8 +832,12 @@
       inputsGrid.addEventListener('input', (e) => {
         const key = e.target.dataset.key;
         if (!key) return;
-        const val = parseFloat(e.target.value || '0');
-        state[key] = isNaN(val) ? 0 : val;
+        const meta = fieldMeta[key] || { kind: 'decimal', decimals: 2 };
+        const allowDecimal = meta.kind === 'decimal';
+        const sanitized = sanitizeInput(e.target.value, allowDecimal);
+        const numericVal = sanitized === '' ? 0 : (allowDecimal ? parseFloat(sanitized) : parseInt(sanitized, 10));
+        state[key] = isFinite(numericVal) ? numericVal : 0;
+        e.target.value = sanitized;
         const isAdvanced = currentMode === 'advanced';
         if (key === 'downPct') {
           if (isAdvanced && !downLocked) {
@@ -807,6 +863,20 @@
           syncDownPctFromPayment();
         }
         triggerRecalc();
+      });
+
+      inputsGrid.addEventListener('focusin', (e) => {
+        const key = e.target.dataset.key;
+        if (!key) return;
+        const meta = fieldMeta[key] || { kind: 'decimal', decimals: 2 };
+        const rawVal = state[key] ?? defaults[key] ?? 0;
+        e.target.value = meta.kind === 'integer' ? Math.round(rawVal) : rawVal.toString();
+      });
+
+      inputsGrid.addEventListener('focusout', (e) => {
+        const key = e.target.dataset.key;
+        if (!key) return;
+        e.target.value = formatDisplayValue(key, state[key]);
       });
 
       exportBtn.addEventListener('click', () => {
