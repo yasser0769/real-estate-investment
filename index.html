@@ -409,6 +409,7 @@
               <th>الإيجار الشهري</th>
               <th class="compact-hidden">القسط السنوي</th>
               <th>القسط الشهري</th>
+              <th>المتبقي من أصل القرض</th>
               <th class="compact-hidden">صافي الربح السنوي</th>
               <th>صافي الربح الشهري</th>
               <th class="compact-hidden">العائد على المقدم</th>
@@ -690,6 +691,18 @@
         const breakEvenDenom = 1 - vacancy / 100 - opexPct / 100;
         const breakEvenMonthly = breakEvenDenom > 0 ? (Math.abs(monthlyPayment) + (fixedAnnual / 12)) / breakEvenDenom : null;
 
+        const kRaw = (idx + 1) * 12;
+        const k = Math.min(kRaw, periods);
+        let balance;
+        const pmtAbs = Math.abs(monthlyPayment);
+        if (monthlyRate === 0) {
+          balance = Math.max(0, loanAmount - pmtAbs * k);
+        } else {
+          const growth = Math.pow(1 + monthlyRate, k);
+          balance = loanAmount * growth - pmtAbs * ((growth - 1) / monthlyRate);
+          balance = Math.max(0, balance);
+        }
+
         years.push({
           year: y,
           price,
@@ -697,6 +710,7 @@
           rentMonthly,
           annualPayment: Math.abs(annualPayment),
           monthlyPayment: Math.abs(monthlyPayment),
+          balance,
           netProfitAnnual,
           netProfitMonthly,
           returnOnDown,
@@ -760,6 +774,7 @@
           fmt0.format(r.rentMonthly),
           fmt0.format(r.annualPayment),
           fmt0.format(r.monthlyPayment),
+          fmt0.format(r.balance),
           fmt0.format(r.netProfitAnnual),
           fmt0.format(r.netProfitMonthly),
           fmt2.format(r.returnOnDown * 100) + '%',
@@ -771,7 +786,7 @@
         cells.forEach((val, idx) => {
           const td = document.createElement('td');
           td.textContent = val;
-          if ([4,6,8,9].includes(idx)) td.classList.add('compact-hidden');
+          if ([4,6,8,9,12].includes(idx)) td.classList.add('compact-hidden');
           tr.appendChild(td);
         });
         resultsTableBody.appendChild(tr);
